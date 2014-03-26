@@ -28,7 +28,7 @@ This repository will start with simply unlocking a device already setup in a
 supported OS, and could later be expanded to changing passwords, enabling
 encryption and other features of the utilities.
 
-Steps
+Non Gui Steps
 ==
 
 Plug in the drive in Linux and give it a few seconds to settle. 
@@ -65,3 +65,15 @@ change.
 
 The number of iterations is also configurable at the drive level. The default is
 1000 rounds. The hashing algorithm used is SHA-256.
+
+Gui (gui.py)
+==
+funkypopcorn created a nice QT UI to make it even easier to unlock the drive,
+run it with ```python gui.py``` and use the unlock/mount buttons to interact
+with the drive.
+
+WD_Encryption_API.txt & wdutils.c
+==
+Dan Lukes did some excellent reverse engineering and wrote code to make the
+drives work in FreeBSD. This could can be ported to Linux and his API docs are
+a great reference for anyone planning on adding support for any new features.
