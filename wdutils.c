@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013 Dan Lukes 
+ * Copyright (c) 2013,2014 Dan Lukes 
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -42,6 +42,7 @@
 #include <iconv.h>
 
 #include <arpa/inet.h>
+#include <termios.h>
 
 #ifdef __FreeBSD__
 #include <sha256.h>
@@ -470,7 +471,7 @@ Unlock(scsi_device *device, char *password, int passwordlen)
 		pwblen = 32;
 		break;
 	case 0x30:
-		pwblen = 0;
+		pwblen = 32;
 		break;
 	default:
 		warnx("Unsupported cipher 0x%02X", e.CurrentCipherID);
@@ -534,7 +535,7 @@ ChangePassword(scsi_device *device, char *oldpassword, int oldpasswordlen, char 
 		pwblen = 32;
 		break;
 	case 0x30:
-		pwblen = 0;
+		pwblen = 32;
 		break;
 	default:
 		warnx("Unsupported cipher 0x%02X", e.CurrentCipherID);
@@ -671,6 +672,8 @@ StrtocID(char *n)
 		return 0x22;
 	else if (strcmp(n, "AES_256_XTS") == 0)
 		return 0x28;
+	else if (strcmp(n, "FDE") == 0)
+		return 0x30;
 	else
 		return -1;
 }
@@ -1038,6 +1041,32 @@ usage(char *p)
 	warnx("%s readhsb <devname> block#", p);
 }
 
+static char *
+fgets_noecho(char * restrict str, int size, FILE * restrict stream) {
+	struct termios tattr;
+	tcflag_t lflag;
+	char *ret;
+	int fd;
+	
+	fd = fileno(stdin);
+	if (tcgetattr(fd, &tattr) != 0) {
+		warn("tcgetattr(): %m");
+		return (NULL);
+	}
+	lflag = tattr.c_lflag;
+	tattr.c_lflag &= ~ECHO;
+	if (tcsetattr(fd, TCSAFLUSH, &tattr) != 0) {
+		warn("tcsetattr(): %m");
+		return (NULL);
+	}
+	ret = fgets(str, size, stream);
+	tattr.c_lflag = lflag;
+	(void)tcsetattr(fd, TCSANOW, &tattr);
+	if (ret != NULL)
+		fputs("\n", stdout);
+	return (ret);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -1112,7 +1141,7 @@ main(int argc, char *argv[])
 		size_t		ps     , il, ol, cc;
 
 		fputs("Enter device password: ", stdout);
-		fgets(pwd, sizeof(pwd) - 1, stdin);
+		fgets_noecho(pwd, sizeof(pwd) - 1, stdin);
 
 
 		ps = strlen(pwd);
@@ -1143,11 +1172,11 @@ main(int argc, char *argv[])
 		size_t		oldps  , newps, il, ol, cc;
 
 		fputs("Enter old device password: ", stdout);
-		fgets(oldpwd, sizeof(oldpwd) - 1, stdin);
+		fgets_noecho(oldpwd, sizeof(oldpwd) - 1, stdin);
 		fputs("Enter new device password: ", stdout);
-		fgets(newpwd, sizeof(newpwd) - 1, stdin);
+		fgets_noecho(newpwd, sizeof(newpwd) - 1, stdin);
 		fputs("Repeat new password: ", stdout);
-		fgets(newpwd2, sizeof(newpwd2) - 1, stdin);
+		fgets_noecho(newpwd2, sizeof(newpwd2) - 1, stdin);
 
 		if (strcmp(newpwd, newpwd2) != 0) {
 			warnx("Not same");
@@ -1201,9 +1230,9 @@ main(int argc, char *argv[])
 		if (strcmp(ask, "YES!\n") == 0) {
 
 			fputs("Enter new device password: ", stdout);
-			fgets(newpwd, sizeof(newpwd) - 1, stdin);
+			fgets_noecho(newpwd, sizeof(newpwd) - 1, stdin);
 			fputs("Repeat new password: ", stdout);
-			fgets(newpwd2, sizeof(newpwd2) - 1, stdin);
+			fgets_noecho(newpwd2, sizeof(newpwd2) - 1, stdin);
 
 			if (strcmp(newpwd, newpwd2) != 0) {
 				warnx("Not same");
