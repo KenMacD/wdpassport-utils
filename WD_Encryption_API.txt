@@ -4,7 +4,7 @@
                                 of 
                          WD My Passport drive
 
-			Rev. A, 17.07.2013
+			Rev. B, 27.02.2014
 
  -------------------------------------------------------------------------
  * INFORMATIONS ARE PROVIDED ``AS IS'' AND ANY EXPRESS OR IMPLIED 
@@ -148,14 +148,14 @@ Table 4 - CIPHER ID
 +--------+-----------------------------------------------------------------+
 |   28h  | AES 256 XTS                                                     |
 +--------+-----------------------------------------------------------------+
-|   30h  | Full Disc Encryption  (no further details avaiable)             |
+|   30h  | Full Disc Encryption                                            |
 +--------+-----------------------------------------------------------------+
 
 PASSWORD LENGTH field
 
 The PASSWORD LENGTH field contain the length of password used on drive.
 Password is binary blob of specified size. The size is expressed in bytes. 
-It is 16B for AES 128 cipher suite and 32B for AES 256 cipher suite.
+It is 16B for AES 128 cipher suite and 32B for AES 256 cipher suite and FDE.
 
 KEY RESET ENABLER field
 
@@ -767,11 +767,13 @@ affect common drive operations in any way.
  =========================================================================
 
 The drive itself use password in the form of binary blob of fixed length
-(16B for AES 128 ciphers, 32B for AES 256 ciphers). It's necesarry to
+(16B for AES 128 ciphers, 32B for AES 256 ciphers and FDE). It's necesarry to
 transform user's text input into that form. Such transform  needs to be
 consistent accross utilities or resulting password blob will not be same and
-unlock operation will fail. WD Utilities use salted sha256 hash to compute
-password blob from user input. 
+unlock operation will fail. Current WD Utilities use salted sha256 hash to 
+compute password blob from user input for AES 256 and FDE. AES 128 drives
+are unsupported by current version of WD Utilities, so WD standard alghoritm
+is not known for AES 128 suite.
 
 All string operations (e.g. user input and hash) are done in UCS-2
 (little-endian) encoding.
@@ -865,9 +867,9 @@ different alghoritm and maintain the drive using it. Of course, vendor's WD
 utilities will not be able to maintain such disc at the same time.
 
 NOTE 2: Alghoritm described above is used on drives set to AES 256 suite of
-cyphers. AES 128 suite is not supported by current WD utilities, thus there
-is no "standard vendor alghoritm" used to calculate password blob known for
-such drives.
+ciphers and for FDE. AES 128 suite is not supported by current WD utilities, 
+thus there is no "standard vendor alghoritm" used to calculate password blob
+known for such drives.
 
  =========================================================================
 
