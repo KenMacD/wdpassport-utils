@@ -4,7 +4,7 @@
                                 of 
                          WD My Passport drive
 
-			Rev. B, 27.02.2014
+			Rev. C, 16.07.2014
 
  -------------------------------------------------------------------------
  * INFORMATIONS ARE PROVIDED ``AS IS'' AND ANY EXPRESS OR IMPLIED 
@@ -179,7 +179,7 @@ application to supply the password that unlock the drive encryption key.
 The security status needs to be 1 (LOCKED, see table 3) otherwise command
 will be terminated with CHECK CONDITION status, with sense key set to 
 ILLEGAL REQUEST, and additional sense code set to 74h/81h (if security 
-status 0 or 2) or 74h/80h (if security status 06h).
+status 0, 2 or 7) or 74h/80h (if security status 06h).
 
 If security status is 1, the supplied password is used to unlock internal
 encryption key. For the format of command parameter block see table 6.
@@ -280,7 +280,7 @@ change and disable security operations and 0 (NotProtected) for enable
 security operation. If drive is not in expected state the command
 will be terminated with CHECK CONDITION status, with sense key set to 
 ILLEGAL REQUEST, and additional sense code set to 74h/81h (if security 
-status 0 or 2) or 74h/80h (if security status 06h).
+status 0, 2 or 7) or 74h/80h (if security status 06h).
 
 For password change and disable security operations the old password is
 required. If password is not correct, command will be terminated with 
