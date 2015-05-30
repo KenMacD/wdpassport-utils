@@ -27,8 +27,8 @@ except AttributeError:
     def _translate(context, text, disambig):
         return QtGui.QApplication.translate(context, text, disambig)
 
-fpathc = os.path.dirname(__file__)+"/cookpw.py"
-fpathp = os.path.dirname(__file__)+"/password.bin"
+fpathc = os.path.dirname(os.path.abspath(__file__))+"/cookpw.py"
+fpathp = os.path.dirname(os.path.abspath(__file__))+"/password.bin"
 
 class Ui_Frame(object):
     def setupUi(self, Frame):
@@ -110,7 +110,7 @@ class Ui_Frame(object):
         try:
             pw = str(self.pwBox.toPlainText())
             if not pw == "":
-                fpathc = os.path.dirname(__file__)+"/cookpw.py"
+                fpathc = os.path.dirname(os.path.abspath(__file__))+"/cookpw.py"
                 subprocess.check_call("python "+fpathc+" "+pw+" >"+fpathp, shell=True)
             else:
                 self.textEdit.append("Password left empty pls type in PW and click Mount again!")
