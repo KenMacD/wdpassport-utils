@@ -111,7 +111,7 @@ class Ui_Frame(object):
             pw = str(self.pwBox.toPlainText())
             if not pw == "":
                 fpathc = os.path.dirname(os.path.abspath(__file__))+"/cookpw.py"
-                subprocess.check_call("python "+fpathc+" "+pw+" >"+fpathp, shell=True)
+                subprocess.check_call("python2 "+fpathc+" "+pw+" >"+fpathp, shell=True)
             else:
                 self.textEdit.append("Password left empty pls type in PW and click Mount again!")
                 return
