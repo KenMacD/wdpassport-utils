@@ -45,10 +45,16 @@ Verify your password.bin is exactly 40 bytes.
 Install the sg3_utils package for your distro.
 
 Run the following command to unlock your dive, replace sgN with your value:
-```sg_raw -s 40 -i password.bin /dev/sgN c1 e1 00 00 00 00 00 00 28 00```
+```sudo sg_raw -s 40 -i password.bin /dev/sgN c1 e1 00 00 00 00 00 00 28 00```
 
-There is currently no indication that this works, I'm working on a script to
-show the status. Simply try to mount the partitions.
+You may then need to run partprobe to find the new partitions:
+```sudo partprobe```
+
+If the drive isn't found you can if it actually unlocked by running:
+```sudo sg_raw -r 32 /dev/sgN c0 45 00 00 00 00 00 00 30```
+
+If the result starts with ```45 00 00 01``` the drive is locked. If it starts
+with ```45 00 00 02``` the drive is unlocked.
 
 Password Cooking (cookpw.py)
 ==
