@@ -35,6 +35,7 @@ Plug in the drive in Linux and give it a few seconds to settle.
 
 In a terminal run: ```dmesg | grep sg | grep "type 13"```. This should return
 one line that contains an sgN where the drive is connected. Remember this value.
+If you use <b> newer Kernels </b> use ```dmesg | grep -i scsi``` to get the drive.
 
 Create a password.bin file by using the cookpw.py script. More information
 will be included below on how it works, but for now just run:
