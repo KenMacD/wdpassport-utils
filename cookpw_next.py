@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import sys
 
 def wdc(password):
     password = "WDC." + password
@@ -32,7 +33,6 @@ def main(password, method, cmd):
     header = bytes.fromhex(header)
     #header = header.decode("hex")
 
-    import sys
     sys.stdout.buffer.write(header + password)
     #sys.stdout.write(header + password)
 
@@ -48,7 +48,7 @@ args = parser.parse_args()
 
 if args.hdparm:
     if len(args.passwd) > 32:
-        exit('Password length cannot be larger than 32!')
+        sys.exit('Password length cannot be larger than 32!')
     method = 'hdparm'
 else:
     method = 'wdc'
