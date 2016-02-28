@@ -1,25 +1,74 @@
 #!/usr/bin/env python
 
 from __future__ import print_function
-from hashlib import sha256
 import sys
+import argparse
+import codecs
 
-def main(password):
-    """Print the data block required to unlock the drive"""
+def wdc(password):
     password = "WDC." + password
-    password = password.encode("utf-16")[2:] # remove fffe
-    for i in range(1000):
+    password = password.encode("utf-16")[2:]
+    from hashlib import sha256
+    for _ in range(1000):
         password = sha256(password).digest()
+    return password
 
-    header = "45" # Signature
-    header = header + "0000000000" # Reserved
-    header = header + "0020" # Password Length
-    header = header.decode("hex")
+def hdparm(password):
+    if password == 'NULL':
+        password = ''
+    return bytes(password.ljust(32, '\0').encode('ascii'))
 
-    sys.stdout.write(header + password)
+def generate_password(password, method, cmd):
+    if method == 'hdparm':
+        password = hdparm(password)
+    elif method == 'wdc':
+        password = wdc(password)
 
-if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: {0} <password>".format(sys.argv[0]), file=sys.stderr)
-        sys.exit(1)
-    main(sys.argv[1])
+    if cmd == 'unlock':
+        field = b'00'
+    else:
+        password = password + password
+        if cmd == 'unset':
+            field = b'10'
+        if cmd == 'set':
+            field = b'01'
+
+    header = b'450000' + field + b'00000020'
+    header = codecs.getdecoder('hex')(header)[0]
+
+    return header + password
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("passwd", type=str)
+    parser.add_argument("--hdparm", action="store_true")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--unset", action="store_true")
+    group.add_argument("--set", action="store_true")
+
+    args = parser.parse_args()
+
+    if args.hdparm:
+        if len(args.passwd) > 32:
+            sys.exit('Password length cannot be larger than 32!')
+        method = 'hdparm'
+    else:
+        method = 'wdc'
+
+    if args.unset:
+        # sg_raw -s 72 -i OUTPUT_FILE DEVICE c1 e2 00 00 00 00 00 00 48 00
+        cmd = 'unset'
+    elif args.set:
+        # sg_raw -s 72 -i OUTPUT_FILE DEVICE c1 e2 00 00 00 00 00 00 48 00
+        cmd = 'set'
+    else:
+        # sg_raw -s 40 -i OUTPUT_FILE DEVICE c1 e1 00 00 00 00 00 00 28 00
+        cmd = 'unlock'
+
+    password = generate_password(args.passwd, method, cmd)
+
+    out = getattr(sys.stdout, 'buffer', sys.stdout)
+    out.write(password)
+
+if __name__ == '__main__':
+    main()
