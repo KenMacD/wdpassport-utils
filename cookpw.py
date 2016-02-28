@@ -18,11 +18,8 @@ def hdparm(password):
         password = ''
     return bytes(password.ljust(32, '\0').encode('ascii'))
 
-def generate_password(password, method, cmd):
-    if method == 'hdparm':
-        password = hdparm(password)
-    elif method == 'wdc':
-        password = wdc(password)
+def generate_password(password, cook_method, cmd):
+    password = cook_method(password)
 
     if cmd == 'unlock':
         field = b'00'
@@ -51,9 +48,9 @@ def main():
     if args.hdparm:
         if len(args.passwd) > 32:
             sys.exit('Password length cannot be larger than 32!')
-        method = 'hdparm'
+        method = hdparm
     else:
-        method = 'wdc'
+        method = wdc
 
     if args.unset:
         # sg_raw -s 72 -i OUTPUT_FILE DEVICE c1 e2 00 00 00 00 00 00 48 00
