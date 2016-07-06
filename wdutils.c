@@ -1100,7 +1100,7 @@ scsicmd_bailout:
 	cam_freeccb(ccb);
 	return (error);
 }
-#else
+#elif defined(__linux__)
 static
 int
 scsicmd(scsi_device *device, char *cdb, int cdb_len, u_int32_t flags, u_int8_t * data_ptr, ssize_t * data_bytes)
@@ -1140,6 +1140,8 @@ scsicmd_error:
 	fprintf(stderr, "SCSI error : %d %s on step %d %p\n", errno, strerror(errno), step, sg_hd); 
 	return -1;
 }
+#else
+#error Function needs to be implemented
 #endif
 
 static
@@ -1209,11 +1211,13 @@ main(int argc, char *argv[])
 	if ((cam_dev = cam_open_spec_device(device, unit, O_RDWR, NULL))
 	    == NULL)
 		errx(1, "%s", cam_errbuf);
-#else
+#elif defined(__linux__)
 	cam_dev = calloc(1,sizeof(*cam_dev));
 	cam_dev->fd = open(argv[2],O_RDWR);
 	if (cam_dev->fd < 0)
 		fprintf(stderr, "SCSI access error : %d %s\n", errno, strerror(errno));
+#else
+#error Function needs to be implemented
 #endif
 	struct sEncryptionStatus e = {.isValid = 0};
 	error = GetEncryptionStatus(cam_dev, &e);
@@ -1485,11 +1489,13 @@ done:
 	if (cam_dev != NULL)
 #ifdef __FreeBSD__
 		cam_close_device(cam_dev)
-#else
+#elif defined(__linux__)
 	{
 		close(cam_dev->fd);
 		free(cam_dev);
 	}
+#else
+#error Function needs to be implemented
 #endif
 		;
 
