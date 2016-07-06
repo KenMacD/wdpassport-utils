@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2013,2014 Dan Lukes 
+ * Copyright (c) 2013-2016 Dan Lukes
+ * 	Linux specific code (c) 2016 Marc Chalain
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -264,7 +265,7 @@ ReadHandyStoreBlock1(scsi_device *device, struct sHandyStoreB1 *h)
 		h->IterationCount = *(uint32_t *) (sector + 8);
 		ol = sizeof(h->Salt);
 		memcpy(h->Salt, sector + 12, 2 * 4);
-		h->Salt[2 * 5] = h->Salt[2 * 5 + 1] = '\0';
+		h->Salt[2 * 4] = h->Salt[2 * 4 + 1] = '\0';
 		memcpy(h->reserved2, sector + 20, 4);
 		memcpy(h->hint, sector + 24, 2 * 101);
 		h->hint[2 * 101] = h->hint[2 * 101 + 1] = '\0';
@@ -361,8 +362,23 @@ print_HDBlock2(FILE * fp, struct sHandyStoreB2 *h)
 	fprintf(fp, "Label='%s'\n", out);
 }
 
+static int
+WriteHandyStore(scsi_device *device, int page, unsigned char *sector, ssize_t ssector)
+{
+	char	cdb	[] = {0xDA, 0x00,
+		0x00, 0x00, 0x00, 0x0F,
+	0x00, 0x00, 0x01, 0x00};
+
+	int	cc;
 
 
+	*(uint32_t *) (cdb + 2) = htonl(page);
+	*(uint16_t *) (cdb + 7) = htons(ssector/512);
+
+	cc = scsicmd(device, cdb, sizeof(cdb), SCSI_DIR_OUT, sector, &ssector);
+
+	return cc;
+}
 
 struct sEncryptionStatus {
 	uint8_t		isValid;
@@ -501,6 +517,14 @@ Unlock(scsi_device *device, char *password, int passwordlen)
 		return e.SecurityState;
 	}
 	cc = ReadHandyStoreBlock1(device, &h);
+	if ( cc != 0) {
+		size_t il, ol;
+		warnx("Unreadable HSB#1 (cc=%d), trying default", cc);
+		h.IterationCount=1000;
+		il = 4;
+		ol = 8;
+		cc = chconv("ASCII", "UCS-2LE", "WDC.", &il, h.Salt, &ol);
+	}
 
 	memset(pwblock, 0, 8);
 	mkPasswordBlock(pwblock + 8, h.Salt, h.IterationCount, password, passwordlen);
@@ -569,6 +593,14 @@ ChangePassword(scsi_device *device, char *oldpassword, int oldpasswordlen, char 
 			return e.SecurityState;
 	}
 	cc = ReadHandyStoreBlock1(device, &h);
+	if ( cc != 0) {
+		size_t il, ol;
+		warnx("Unreadable HSB#1 (cc=%d), trying default", cc);
+		h.IterationCount=1000;
+		il = 4;
+		ol = 8;
+		cc = chconv("ASCII", "UCS-2LE", "WDC.", &il, h.Salt, &ol);
+	}
 
 	memset(pwblock, 0, sizeof(pwblock));
 
@@ -602,7 +634,7 @@ ChangePassword(scsi_device *device, char *oldpassword, int oldpasswordlen, char 
 }
 
 static int
-SecureErase(scsi_device *device, unsigned char CipherID)
+SecureErase(scsi_device *device, unsigned char CipherID, off_t ksize, char *key)
 {
 	struct sEncryptionStatus e = {.isValid = 0}, enew = {.isValid = 0};
 	struct sHandyStoreB1 h = {.isValid = 0};
@@ -629,6 +661,14 @@ SecureErase(scsi_device *device, unsigned char CipherID)
 	memcpy(cdb + 2, e.KeyResetEnabler, 4);
 
 	cc = ReadHandyStoreBlock1(device, &h);
+	if ( cc != 0) {
+		size_t il, ol;
+		warnx("Unreadable HSB#1 (cc=%d), trying default", cc);
+		h.IterationCount=1000;
+		il = 4;
+		ol = 8;
+		cc = chconv("ASCII", "UCS-2LE", "WDC.", &il, h.Salt, &ol);
+	}
 
 	memset(pwblock, 0, sizeof(pwblock));
 
@@ -661,6 +701,17 @@ SecureErase(scsi_device *device, unsigned char CipherID)
 		* ((uint16_t *) (pwblock + 4 + 2)) = htons(pwblen * 8);
 
 	arc4random_buf(pwblock + 4 + 4, pwblen);
+	if (pwblen>0) {
+		if (key != NULL && ksize > 0) {
+			if (ksize != pwblen) {
+				warnx("Incorrect key length (%ldB required, %ldB supplied)", pwblen, ksize);
+				return e.SecurityState;
+			}
+			memmove(pwblock + 4 + 4, key, pwblen);
+		} else {
+			arc4random_buf(pwblock + 4 + 4, pwblen);
+		}
+	}
 
 	pwblen += 8;
 	//add header length
@@ -1050,7 +1101,7 @@ scsicmd_bailout:
 	cam_freeccb(ccb);
 	return (error);
 }
-#else
+#elif defined(__linux__)
 static
 int
 scsicmd(scsi_device *device, char *cdb, int cdb_len, u_int32_t flags, u_int8_t * data_ptr, ssize_t * data_bytes)
@@ -1087,9 +1138,11 @@ scsicmd(scsi_device *device, char *cdb, int cdb_len, u_int32_t flags, u_int8_t *
 
 	return 0;
 scsicmd_error:
-	fprintf(stderr, "SCSI error : %d %s on step %d %p\n", errno, strerror(errno), step, sg_hd); 
+	err(1, "SCSI device error on step %d %p", step, sg_hd); 
 	return -1;
 }
+#else
+#error Function needs to be implemented
 #endif
 
 static
@@ -1099,8 +1152,9 @@ usage(char *p)
 	warnx("%s dump <devname>", p);
 	warnx("%s unlock <devname>", p);
 	warnx("%s set <devname>", p);
-	warnx("%s erase <devname> [CipherName]", p);
+	warnx("%s erase <devname> [CipherName [FileWithKey]]", p);
 	warnx("%s readhsb <devname> block#", p);
+	warnx("%s writehsb <devname> block# FileWithDataToWrite", p);
 }
 
 static char *
@@ -1138,6 +1192,7 @@ main(int argc, char *argv[])
 	int		error = 0;
 
 	char		name      [30];
+	char		*key = NULL;
 
 	//printf("sizeof wchar_t = %d\n", sizeof(wchar_t));
 	//assert(sizeof(wchar_t) == 2);
@@ -1157,11 +1212,11 @@ main(int argc, char *argv[])
 	if ((cam_dev = cam_open_spec_device(device, unit, O_RDWR, NULL))
 	    == NULL)
 		errx(1, "%s", cam_errbuf);
-#else
+#elif defined(__linux__)
 	cam_dev = calloc(1,sizeof(*cam_dev));
 	cam_dev->fd = open(argv[2],O_RDWR);
 	if (cam_dev->fd < 0)
-		fprintf(stderr, "SCSI access error : %d %s\n", errno, strerror(errno));
+		err(1, "SCSI device access error");
 #endif
 	struct sEncryptionStatus e = {.isValid = 0};
 	error = GetEncryptionStatus(cam_dev, &e);
@@ -1169,18 +1224,27 @@ main(int argc, char *argv[])
 	if (strcmp(argv[1], "dump") == 0) {
 		struct sHandyStoreDescr h = {.isValid = 0};
 		error = GetHandyStoreSize(cam_dev, &h);
-		warnx("Handy Store size %d blocks * %dB (max transfer size %d block)",
-		      h.LastHandyBlockAddress + 1, h.BlockLength, h.MaximumTransferLength);
+		if ( error != 0) {
+			warnx("Handy Store size is not readable (error = %d)", error);
+		} else
+			warnx("Handy Store size %d blocks * %dB (max transfer size %d block)",
+			      h.LastHandyBlockAddress + 1, h.BlockLength, h.MaximumTransferLength);
 
 		print_EncryptionStatus(stderr, &e);
 
 		struct sHandyStoreB1 hb1 = {.isValid = 0};
 		error = ReadHandyStoreBlock1(cam_dev, &hb1);
-		print_HDBlock1(stderr, &hb1);
+		if ( error != 0) {
+			warnx("Handy Store Block 1 is not readable (error = %d)", error);
+		} else
+			print_HDBlock1(stderr, &hb1);
 
 		struct sHandyStoreB2 hb2 = {.isValid = 0};
 		error = ReadHandyStoreBlock2(cam_dev, &hb2);
-		print_HDBlock2(stderr, &hb2);
+		if ( error != 0) {
+			warnx("Handy Store Block 1 is not readable (error = %d)", error);
+		} else
+			print_HDBlock2(stderr, &hb2);
 
 		struct sDeviceConfigurationPage sdcp, sr;
 		error = GetDeviceConfigurationPage(cam_dev, &sdcp, &sr);
@@ -1280,14 +1344,47 @@ main(int argc, char *argv[])
 		size_t		newps = 0;
 		size_t		il     , ol, cc;
 		int		CipherID = -1;
+		off_t		fsize = -1;
 
-		if (argc < 4)
+		if (argc < 4 || argv[3] == NULL)
 			CipherID = 0;
 		else {
 			CipherID = StrtocID(argv[3]);
 			if (CipherID == -1) {
 				warnx("Unknown cipher '%s'", argv[3]);
 				goto done;
+			}
+			if (argc >= 4 && argv[4] != NULL) {
+				int d;
+				off_t rsize;
+
+				d = open(argv[4], O_RDONLY);
+				if (d < 0) {
+					warn("Can't open '%s':", argv[4]);
+					goto done;
+				}
+				fsize = lseek(d, 0, SEEK_END);
+				if (fsize < 0) {
+					warn("Key File Seek to end error:");
+					goto done;
+				}
+				if (lseek(d, 0, SEEK_SET) < 0) {
+					warn("Key File Seek to begin error:");
+					goto done;
+				}
+				if (fsize > 65536)
+					fsize = 65536;
+				key = calloc(fsize, 1);
+				if (key == NULL) {
+					warn("Calloc of key buffer (size %jd) failed", (intmax_t)fsize);
+					goto done;
+				}
+				rsize = read(d, key, fsize);
+				if (rsize != fsize) {
+					warn("Key read failed:");
+					goto done;
+				}
+				close(d);
 			}
 		}
 		fputs("Do you want secure erase ? (write 'YES!'): ", stdout);
@@ -1301,7 +1398,7 @@ main(int argc, char *argv[])
 
 			if (strcmp(newpwd, newpwd2) != 0) {
 				warnx("Not same");
-				return 1;
+				goto done;
 			};
 
 			newps = strlen(newpwd);
@@ -1315,7 +1412,7 @@ main(int argc, char *argv[])
 
 			cc = chconv("ASCII", "UCS-2LE", newpwd, &il, newopw, &ol);
 
-			error = SecureErase(cam_dev, CipherID);
+			error = SecureErase(cam_dev, CipherID, fsize, key);
 			warnx("Device status: %02X (%s)", error, eIDtoStr((int)error));
 		}
 	} else if (strcmp(argv[1], "readhsb") == 0) {
@@ -1337,15 +1434,61 @@ main(int argc, char *argv[])
 		}
 		warnx("Handy store block %ld:", bnumber);
 		hexdump(sector, ssector, NULL);
+	} else if (strcmp(argv[1], "writehsb") == 0) {
+		long int bnumber = -1;
+		ssize_t ssector = -1;
+
+		if (argc < 5 || argv[3] == NULL || argv[4] == NULL) {
+			usage(argv[0]);
+			goto done;
+		} else {
+			bnumber = atol(argv[3]);
+			int d;
+			off_t rsize;
+
+			d = open(argv[4], O_RDONLY);
+			if (d < 0) {
+				warn("Can't open '%s':", argv[4]);
+				goto done;
+			}
+			ssector = lseek(d, 0, SEEK_END);
+			if (ssector < 0) {
+				warn("Data File Seek to end error:");
+				goto done;
+			}
+			if (lseek(d, 0, SEEK_SET) < 0) {
+				warn("Data File Seek to begin error:");
+				goto done;
+			}
+			key = calloc(ssector, 1);
+			if (key == NULL) {
+				warn("Calloc of sector buffer (size %jd) failed", (intmax_t)ssector);
+				goto done;
+			}
+			rsize = read(d, key, ssector);
+			if (rsize != ssector) {
+				warn("Data read failed:");
+				goto done;
+			}
+			close(d);
+		}
+
+
+		error = WriteHandyStore(cam_dev, bnumber, key, ssector);
+		if (error != 0) {
+			warnx("Handy store block %ld write failed: %d", bnumber, error);
+			goto done;
+		}
 	} else {
 		usage(argv[0]);
 	}
 
 done:
+	free(key);
 	if (cam_dev != NULL)
 #ifdef __FreeBSD__
 		cam_close_device(cam_dev)
-#else
+#elif defined(__linux__)
 	{
 		close(cam_dev->fd);
 		free(cam_dev);

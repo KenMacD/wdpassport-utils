@@ -79,6 +79,8 @@ funkypopcorn created a nice QT UI to make it even easier to unlock the drive,
 run it with ```python gui.py``` and use the unlock/mount buttons to interact
 with the drive.
 
+You may also need to install gksu to use the GUI.
+
 WD_Encryption_API.txt & wdutils.c
 ==
 Dan Lukes did some excellent reverse engineering and wrote code to make the
