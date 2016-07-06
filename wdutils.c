@@ -64,7 +64,30 @@ typedef struct cam_device scsi_device;
 #define min(a,b) ((a)<(b)?(a):(b))
 #endif
 
-#ifdef __Linux__
+#ifdef __linux__
+#include <openssl/sha.h>
+#include <errno.h>
+#include <scsi/sg.h>
+#include <sys/ioctl.h>
+
+#define restrict __restrict
+#define __restrict const
+
+#define SCSI_DIR_IN 0x01
+#define SCSI_DIR_OUT 0x02
+
+typedef struct
+{
+	int fd;
+} scsi_device;
+
+int arc4random_buf(char *buf, int size)
+{
+	int fd = open("/dev/random", O_RDONLY);
+	size -= read(fd, buf, size);
+	close(fd);
+	return size;
+}
 #endif
 
 static int	scsicmd(scsi_device *device, char *cdb, int cdb_len, u_int32_t flags, u_int8_t * data_ptr, ssize_t * data_bytes);
@@ -81,7 +104,7 @@ chconv(const char *fromcode, const char *tocode, const char *inbuf, size_t * ins
 	if (cd == (iconv_t) (-1)) {
 		return -1;
 	}
-	cc = iconv(cd, &inbuf, insize, &outbuf, outsize);
+	cc = iconv(cd, (char**)&inbuf, insize, &outbuf, outsize);
 	iconv_close(cd);
 
 	return cc;
@@ -1077,7 +1100,46 @@ scsicmd_bailout:
 	cam_freeccb(ccb);
 	return (error);
 }
+#else
+static
+int
+scsicmd(scsi_device *device, char *cdb, int cdb_len, u_int32_t flags, u_int8_t * data_ptr, ssize_t * data_bytes)
+{
+	int status, step = 0;
+	struct sg_header sg_hddata, *sg_hd;
+	char *buf;
+	int size_in, size_out;
+	size_in = sizeof(*sg_hd);
+	if (flags & SCSI_DIR_IN)
+		size_in += *data_bytes;
+	size_out = sizeof(*sg_hd) + cdb_len;
+	if (flags & SCSI_DIR_OUT)
+		size_out += *data_bytes;
 
+	buf = calloc(1, sizeof(*sg_hd) + cdb_len + *data_bytes);
+	sg_hd = (struct sg_header *)buf;
+	sg_hd->reply_len = size_in;
+	sg_hd->twelve_byte = cdb_len == 12;
+	sg_hd->result = 0;
+	memcpy(buf + sizeof(*sg_hd), cdb, cdb_len);
+	if (flags & SCSI_DIR_OUT)
+		memcpy(buf + sizeof(*sg_hd) + cdb_len, data_ptr, *data_bytes);
+
+	status = write(device->fd, buf, size_out);
+	if (status < 0 ) goto scsicmd_error;
+	step++;
+
+	status = read(device->fd, sg_hd, size_in);
+	if (status < 0 ) goto scsicmd_error;
+	step++;
+	if (data_ptr)
+		memcpy(data_ptr, ((char*)sg_hd + sizeof(*sg_hd)), size_in - sizeof(*sg_hd));
+
+	return 0;
+scsicmd_error:
+	fprintf(stderr, "SCSI error : %d %s on step %d %p\n", errno, strerror(errno), step, sg_hd); 
+	return -1;
+}
 #endif
 
 static
@@ -1148,7 +1210,10 @@ main(int argc, char *argv[])
 	    == NULL)
 		errx(1, "%s", cam_errbuf);
 #else
-#error Function needs to be implemented
+	cam_dev = calloc(1,sizeof(*cam_dev));
+	cam_dev->fd = open(argv[2],O_RDWR);
+	if (cam_dev->fd < 0)
+		fprintf(stderr, "SCSI access error : %d %s\n", errno, strerror(errno));
 #endif
 	struct sEncryptionStatus e = {.isValid = 0};
 	error = GetEncryptionStatus(cam_dev, &e);
@@ -1421,7 +1486,10 @@ done:
 #ifdef __FreeBSD__
 		cam_close_device(cam_dev)
 #else
-#error Function needs to be implemented
+	{
+		close(cam_dev->fd);
+		free(cam_dev);
+	}
 #endif
 		;
 
