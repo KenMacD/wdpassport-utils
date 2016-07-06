@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2013-2016 Dan Lukes 
+ * Copyright (c) 2013-2016 Dan Lukes
+ * 	Linux specific code (c) 2016 Marc Chalain
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
