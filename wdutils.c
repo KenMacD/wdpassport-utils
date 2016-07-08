@@ -1138,7 +1138,7 @@ scsicmd(scsi_device *device, char *cdb, int cdb_len, u_int32_t flags, u_int8_t *
 
 	return 0;
 scsicmd_error:
-	fprintf(stderr, "SCSI error : %d %s on step %d %p\n", errno, strerror(errno), step, sg_hd); 
+	err(1, "SCSI device error on step %d %p", step, sg_hd); 
 	return -1;
 }
 #else
@@ -1216,9 +1216,7 @@ main(int argc, char *argv[])
 	cam_dev = calloc(1,sizeof(*cam_dev));
 	cam_dev->fd = open(argv[2],O_RDWR);
 	if (cam_dev->fd < 0)
-		fprintf(stderr, "SCSI access error : %d %s\n", errno, strerror(errno));
-#else
-#error Function needs to be implemented
+		err(1, "SCSI device access error");
 #endif
 	struct sEncryptionStatus e = {.isValid = 0};
 	error = GetEncryptionStatus(cam_dev, &e);
@@ -1495,8 +1493,6 @@ done:
 		close(cam_dev->fd);
 		free(cam_dev);
 	}
-#else
-#error Function needs to be implemented
 #endif
 		;
 
