@@ -1217,6 +1217,8 @@ main(int argc, char *argv[])
 	cam_dev->fd = open(argv[2],O_RDWR);
 	if (cam_dev->fd < 0)
 		err(1, "SCSI device access error");
+#else
+#error Function needs to be implemented
 #endif
 	struct sEncryptionStatus e = {.isValid = 0};
 	error = GetEncryptionStatus(cam_dev, &e);
@@ -1493,6 +1495,8 @@ done:
 		close(cam_dev->fd);
 		free(cam_dev);
 	}
+#else
+#error Function needs to be implemented
 #endif
 		;
 
