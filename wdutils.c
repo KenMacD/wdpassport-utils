@@ -330,6 +330,7 @@ ReadHandyStoreBlock2(scsi_device *device, struct sHandyStoreB2 *h)
 		warnx("Wrong HSB2 checksum");
 		return 1;
 	}
+	hexdump(sector, ssector, "HSB2 block:");
 	if (memcmp(Signature, sector, 4) != 0) {
 		warnx("Wrong HSB2 signature ");
 		return 1;
@@ -1151,6 +1152,7 @@ usage(char *p)
 {
 	warnx("%s dump <devname>", p);
 	warnx("%s unlock <devname>", p);
+	warnx("%s funlock <devname> <file.bin>", p);
 	warnx("%s set <devname>", p);
 	warnx("%s erase <devname> [CipherName [FileWithKey]]", p);
 	warnx("%s readhsb <devname> block#", p);
@@ -1287,6 +1289,46 @@ main(int argc, char *argv[])
 		cc = chconv("ASCII", "UCS-2LE", pwd, &il, opw, &ol);
 		error = Unlock(cam_dev, opw, 2 * ps);
 		warnx("Device status: %02X (%s)", error, eIDtoStr((int)error));
+		e.SecurityState = error;
+		goto done;
+
+	} else if (strcmp(argv[1], "funlock") == 0) {
+		if (e.SecurityState != 0x01) {
+			warnx("SecurityState %02X (%s) not compatible with unlock.", e.SecurityState, eIDtoStr(e.SecurityState));
+			goto done;
+		}
+
+		char cdb[] = {0xC1, 0xE1, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x28, 0x00};
+		struct {
+			char hdr[8];
+			char passwd[32];
+		} bin;
+
+		if (argc <3 || !argv[3]) {
+			warn("kefile expected.");
+			return 1;
+		}
+
+		int d, len;
+		d = open(argv[3], O_RDONLY);
+		if (d < 0) {
+			warn("Can't open '%s':", argv[3]);
+			error = errno;
+			goto done;
+		}
+		len = read(d, &bin, sizeof(bin));
+		close(d);
+		if(len <= sizeof(bin.hdr)) {
+			warn("'%s' length too short:", argv[3]);
+			goto done;
+		}
+
+		cdb[8] = len;
+		error = scsicmd(cam_dev, cdb, sizeof(cdb), SCSI_DIR_OUT, (u_int8_t *)&bin, &len);
+		memset(&bin, 0, sizeof(bin));
+
+		error = GetEncryptionStatus(cam_dev, &e);
+		warnx("Device status: %02X (%s)", e.SecurityState, eIDtoStr((int)e.SecurityState));
 		e.SecurityState = error;
 		goto done;
 
