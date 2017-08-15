@@ -105,8 +105,9 @@ partprobe /dev/$BLKDEV
 step 2: generate a specific filter rule for the drive:
 
 ```
-udevadm info -a /dev/sg5 | grep 'ATTRS{wwid}'
+ls /dev/sg* | xargs -n1 udevadm info -a | grep 'ATTRS{wwid}'
 ``` 
+Select the ones with 'SES Device' in them.
 
 step 3: create a udev rule in /etc/udev/rules.d/10-wd-passport.rules using the
         wwid attribute found in step 2.
