@@ -84,5 +84,30 @@ You may also need to install gksu to use the GUI.
 WD_Encryption_API.txt & wdutils.c
 ==
 Dan Lukes did some excellent reverse engineering and wrote code to make the
-drives work in FreeBSD. This could can be ported to Linux and his API docs are
+drives work in FreeBSD. This is ported to Linux and his API docs are
 a great reference for anyone planning on adding support for any new features.
+
+Using wdutils & udev
+==
+Using udev you can unlock the drive upon insertion.
+
+step 1: create an unlock.sh wrapper script
+
+```#!/bin/sh
+BIN=$1
+wdutils funlock ${DEVNAME} "${BIN}"
+BLK=`echo /sys${DEVPATH} | sed -e 's/.\/scsi_generic\/.*/0\/block/'`
+BLKDEV=`ls ${BLK}`
+partprobe /dev/$BLKDEV```
+
+
+step 2: generate a specific filter rule for the drive:
+
+```udevadm info -a /dev/sg5 | grep 'ATTRS{wwid}'``` 
+
+step 3: create a udev rule in /etc/udev/rules.d/10-wd-passport.rules using the
+        wwid attribute found in step 2.
+
+```KERNEL=="sg*",SUBSYSTEMS=="scsi",ATTRS{type}=="13",ATTRS{wwid}=="t10.WD      SES Device      WXYZABCDEFG    ",RUN+="unlock.sh password.bin"```
+
+You can add additional drives in a similar way.
