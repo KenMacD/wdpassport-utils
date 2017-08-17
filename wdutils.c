@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2013-2016 Dan Lukes
- * 	Linux specific code (c) 2016 Marc Chalain
+ * 	Linux specific code (c) 2017 Henk Vergonet
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -188,8 +188,7 @@ static inline scsi_device *scsi_open(const char *file)
     dev->hdr.interface_id	= 'S';
     dev->hdr.mx_sb_len		= sizeof(dev->sense_buffer);
     dev->hdr.sbp		= dev->sense_buffer;
-    dev->hdr.timeout		= 20000;	/* millisecs */
-//    dev->hdr.flags		= SG_FLAG_DIRECT_IO | SG_FLAG_LUN_INHIBIT;
+    dev->hdr.timeout		= 5000;	/* millisecs */
     return dev;
 }
 
@@ -232,7 +231,7 @@ static inline void scsi_close(scsi_device *dev)
 
 int arc4random_buf(void *buf, int size)
 {
-	int fd = open("/dev/random", O_RDONLY);
+	int fd = open("/dev/urandom", O_RDONLY);
 	size -= read(fd, buf, size);
 	close(fd);
 	return size;
@@ -417,7 +416,6 @@ ReadHandyStoreBlock1(scsi_device *device, struct sHandyStoreB1 *h)
 		memcpy(h->Signature, sector + 0, 4);
 		memcpy(h->reserved1, sector + 4, 4);
 		h->IterationCount = *(uint32_t *) (sector + 8);
-		//ol = sizeof(h->Salt);
 		memcpy(h->Salt, sector + 12, 2 * 4);
 		h->Salt[2 * 4] = h->Salt[2 * 4 + 1] = '\0';
 		memcpy(h->reserved2, sector + 20, 4);
