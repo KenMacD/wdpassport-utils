@@ -93,21 +93,27 @@ Using udev you can unlock the drive upon insertion.
 
 step 1: create an unlock.sh wrapper script
 
-```#!/bin/sh
+```
+#!/bin/sh
 BIN=$1
 wdutils funlock ${DEVNAME} "${BIN}"
 BLK=`echo /sys${DEVPATH} | sed -e 's/.\/scsi_generic\/.*/0\/block/'`
 BLKDEV=`ls ${BLK}`
-partprobe /dev/$BLKDEV```
-
+partprobe /dev/$BLKDEV
+```
 
 step 2: generate a specific filter rule for the drive:
 
-```udevadm info -a /dev/sg5 | grep 'ATTRS{wwid}'``` 
+```
+ls /dev/sg* | xargs -n1 udevadm info -a | grep 'ATTRS{wwid}'
+``` 
+Select the ones with 'SES Device' in them.
 
 step 3: create a udev rule in /etc/udev/rules.d/10-wd-passport.rules using the
         wwid attribute found in step 2.
 
-```KERNEL=="sg*",SUBSYSTEMS=="scsi",ATTRS{type}=="13",ATTRS{wwid}=="t10.WD      SES Device      WXYZABCDEFG    ",RUN+="unlock.sh password.bin"```
+```
+KERNEL=="sg*",SUBSYSTEMS=="scsi",ATTRS{type}=="13",ATTRS{wwid}=="t10.WD      SES Device      WXYZABCDEFG    ",RUN+="unlock.sh password.bin"
+```
 
 You can add additional drives in a similar way.
