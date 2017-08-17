@@ -215,7 +215,7 @@ static int scsicmd(scsi_device *dev, char *cmdp, unsigned char cmd_len, int dxfe
             printf("host_status=0x%x\n", dev->hdr.host_status);
         if (dev->hdr.driver_status)
             printf("driver_status=0x%x\n", dev->hdr.driver_status);
-        return errno;
+        return EIO;
     }
     *dxfer_len -= dev->hdr.resid;
     return 0;
