@@ -45,7 +45,12 @@
 #include <arpa/inet.h>
 #include <termios.h>
 
+static void hexdump(const void *ptr, int length, const char *hdr);
+
 #ifdef __FreeBSD__
+/*******************************************************************************
+ * FreeBSD Implementation
+ ******************************************************************************/
 #include <sha256.h>
 
 #include <cam/scsi/scsi_message.h>
@@ -55,6 +60,185 @@
 #define SCSI_DIR_OUT CAM_DIR_OUT
 
 typedef struct cam_device scsi_device;
+
+static inline scsi_device *scsi_open(const char *file)
+{
+	scsi_device *cam_dev = NULL;
+	char	name[30];
+	int	unit;
+
+	if (cam_get_device(argv[2], name, sizeof(name), &unit) == -1)
+		errx(1, "%s", cam_errbuf);
+
+	if ((cam_dev = cam_open_spec_device(name, unit, O_RDWR, NULL)) == NULL)
+		errx(1, "%s", cam_errbuf);
+
+	return cam_dev;
+}
+
+static
+int
+scsicmd(scsi_device *device, char *cdb, int cdb_len, u_int32_t flags, u_int8_t * data_ptr, ssize_t * data_bytes)
+{
+	union ccb      *ccb;
+	int		error = 0;
+	int		retval;
+	int		retry_count = 0;
+	int		timeout = 5000;
+
+	ccb = cam_getccb(device);
+
+	if (ccb == NULL) {
+		warnx("scsicmd: error allocating ccb");
+		return (1);
+	}
+	bzero(&(&ccb->ccb_h)[1],
+	      sizeof(union ccb) - sizeof(struct ccb_hdr));
+
+
+	if (retry_count > 0)
+		flags |= CAM_PASS_ERR_RECOVER;
+
+	/* Disable freezing the device queue */
+	flags |= CAM_DEV_QFRZDIS;
+
+	/*
+	 * We should probably use csio_build_visit or something like that
+	 * here, but it's easier to encode arguments as you go. The
+	 * alternative would be skipping the CDB argument and then encoding
+	 * it here, since we've got the data buffer argument by now.
+	 */
+	bcopy(cdb, &ccb->csio.cdb_io.cdb_bytes, cdb_len);
+
+	cam_fill_csio(&ccb->csio,
+		       /* retries */ retry_count,
+		       /* cbfcnp */ NULL,
+		       /* flags */ flags,
+		       /* tag_action */ MSG_SIMPLE_Q_TAG,
+		       /* data_ptr */ data_ptr,
+		       /* dxfer_len */ *data_bytes,
+		       /* sense_len */ SSD_FULL_SIZE,
+		       /* cdb_len */ cdb_len,
+		       /* timeout */ timeout ? timeout : 5000);
+
+	if (((retval = cam_send_ccb(device, ccb)) < 0)
+	    || ((ccb->ccb_h.status & CAM_STATUS_MASK) != CAM_REQ_CMP)) {
+		const char	warnstr[] = "error sending command";
+
+		if (retval < 0)
+			warn(warnstr);
+		else
+			warnx(warnstr);
+
+		cam_error_print(device, ccb, CAM_ESF_ALL,
+				CAM_EPF_ALL, stderr);
+		error = 1;
+		goto scsicmd_bailout;
+	}
+scsicmd_bailout:
+
+	cam_freeccb(ccb);
+	return (error);
+}
+
+static inline void scsi_close(scsi_device *dev)
+{
+    if (dev)
+	cam_close_device(dev)
+}
+
+#elif defined(__linux__)
+/*******************************************************************************
+ * Linux Implementation
+ ******************************************************************************/
+#include <openssl/sha.h>
+#include <errno.h>
+#include <scsi/sg.h>
+#include <sys/ioctl.h>
+
+#define restrict __restrict
+#define __restrict const
+
+#define SCSI_DIR_IN	SG_DXFER_FROM_DEV
+#define SCSI_DIR_OUT	SG_DXFER_TO_DEV
+
+typedef struct
+{
+	int fd;
+	unsigned char	sense_buffer[32];
+	sg_io_hdr_t	hdr;
+} scsi_device;
+
+static inline scsi_device *scsi_open(const char *file)
+{
+    scsi_device *dev;
+    int fd, ver;
+
+    if ((fd = open(file, O_RDWR)) < 0)
+        return NULL;
+
+    /* Just to be safe, check we have a new sg device by trying an ioctl */
+    if ((ioctl(fd, SG_GET_VERSION_NUM, &ver) < 0) || (ver < 30000)) {
+	warn("%s is old version",file);
+	close(fd);
+	return NULL;
+    }
+    dev = calloc(1, sizeof(*dev));
+    dev->fd = fd;
+    dev->hdr.interface_id	= 'S';
+    dev->hdr.mx_sb_len		= sizeof(dev->sense_buffer);
+    dev->hdr.sbp		= dev->sense_buffer;
+    dev->hdr.timeout		= 20000;	/* millisecs */
+//    dev->hdr.flags		= SG_FLAG_DIRECT_IO | SG_FLAG_LUN_INHIBIT;
+    return dev;
+}
+
+static int scsicmd(scsi_device *dev, char *cmdp, unsigned char cmd_len, int dxfer_direction, unsigned char *dxferp, ssize_t *dxfer_len)
+{
+    dev->hdr.dxfer_direction = dxfer_direction;
+    dev->hdr.cmd_len = cmd_len;
+    dev->hdr.dxfer_len = (unsigned int)*dxfer_len;
+    dev->hdr.dxferp = dxferp;
+    dev->hdr.cmdp = (unsigned char *)cmdp;
+
+    if (ioctl(dev->fd, SG_IO, &dev->hdr) < 0) {
+        warn("SG_IO failed");
+        return errno;
+    }
+
+    /* now for the error processing */
+    if ((dev->hdr.info & SG_INFO_OK_MASK) != SG_INFO_OK) {
+        if (dev->hdr.sb_len_wr > 0)
+            hexdump(dev->sense_buffer, dev->hdr.sb_len_wr, "sense data:");
+        if (dev->hdr.masked_status)
+            printf("SCSI status=0x%x\n", dev->hdr.status);
+        if (dev->hdr.host_status)
+            printf("host_status=0x%x\n", dev->hdr.host_status);
+        if (dev->hdr.driver_status)
+            printf("driver_status=0x%x\n", dev->hdr.driver_status);
+        return errno;
+    }
+    *dxfer_len -= dev->hdr.resid;
+    return 0;
+}
+
+static inline void scsi_close(scsi_device *dev)
+{
+    if (dev) {
+	close(dev->fd);
+	free(dev);
+    }
+}
+
+int arc4random_buf(void *buf, int size)
+{
+	int fd = open("/dev/random", O_RDONLY);
+	size -= read(fd, buf, size);
+	close(fd);
+	return size;
+}
+#else
+#error Function needs to be implemented
 #endif
 
 
@@ -64,34 +248,6 @@ typedef struct cam_device scsi_device;
 #ifndef min
 #define min(a,b) ((a)<(b)?(a):(b))
 #endif
-
-#ifdef __linux__
-#include <openssl/sha.h>
-#include <errno.h>
-#include <scsi/sg.h>
-#include <sys/ioctl.h>
-
-#define restrict __restrict
-#define __restrict const
-
-#define SCSI_DIR_IN 0x01
-#define SCSI_DIR_OUT 0x02
-
-typedef struct
-{
-	int fd;
-} scsi_device;
-
-int arc4random_buf(char *buf, int size)
-{
-	int fd = open("/dev/random", O_RDONLY);
-	size -= read(fd, buf, size);
-	close(fd);
-	return size;
-}
-#endif
-
-static int	scsicmd(scsi_device *device, char *cdb, int cdb_len, u_int32_t flags, u_int8_t * data_ptr, ssize_t * data_bytes);
 
 static		size_t
 chconv(const char *fromcode, const char *tocode, const char *inbuf, size_t * insize,
@@ -232,7 +388,7 @@ struct sHandyStoreB1 {
 	char		Salt      [2 * (4 + 1)];
 	uint8_t		reserved2[4];
 	char		hint      [2 * (101 + 1)];
-	uint8_t		reserved3[285];
+	char		reserved3[285];
 	uint8_t		checksum;
 
 };
@@ -242,7 +398,7 @@ ReadHandyStoreBlock1(scsi_device *device, struct sHandyStoreB1 *h)
 {
 	int		cc;
 	const char	Signature[4] = {0x00, 0x01, 'D', 'W'};
-	static unsigned char sector[512];
+	unsigned char	sector[512];
 	ssize_t		ssector = sizeof(sector);
 
 
@@ -258,12 +414,10 @@ ReadHandyStoreBlock1(scsi_device *device, struct sHandyStoreB1 *h)
 		return 1;
 	}
 	if (h != NULL) {
-		size_t		ol;
-
 		memcpy(h->Signature, sector + 0, 4);
 		memcpy(h->reserved1, sector + 4, 4);
 		h->IterationCount = *(uint32_t *) (sector + 8);
-		ol = sizeof(h->Salt);
+		//ol = sizeof(h->Salt);
 		memcpy(h->Salt, sector + 12, 2 * 4);
 		h->Salt[2 * 4] = h->Salt[2 * 4 + 1] = '\0';
 		memcpy(h->reserved2, sector + 20, 4);
@@ -271,8 +425,9 @@ ReadHandyStoreBlock1(scsi_device *device, struct sHandyStoreB1 *h)
 		h->hint[2 * 101] = h->hint[2 * 101 + 1] = '\0';
 		memcpy(h->reserved3, sector + 226, 285);
 		h->checksum = sector[511];
+		h->isValid = 1;
 	}
-	//hexdump(sector, ssector, NULL);
+	//hexdump(sector, ssector, "HSB1");
 
 	return cc;
 }
@@ -281,7 +436,7 @@ static void
 print_HDBlock1(FILE * fp, struct sHandyStoreB1 *h)
 {
 	char		out       [202];
-	size_t		il     , ol, cc;
+	size_t		il     , ol;
 
 	if (h->isValid == 0)
 		return;
@@ -291,14 +446,19 @@ print_HDBlock1(FILE * fp, struct sHandyStoreB1 *h)
 	il = 2 * 4;
 	ol = sizeof(out);
 	memset(out, 0, sizeof(out));
-	cc = chconv("UCS-2LE", "ASCII//IGNORE", h->Salt, &il, out, &ol);
+	chconv("UCS-2LE", "ASCII//IGNORE", h->Salt, &il, out, &ol);
 	fprintf(fp, "Salt='%s'\n", out);
 
 	il = 2 * 101;
 	ol = sizeof(out);
 	memset(out, 0, sizeof(out));
-	cc = chconv("UCS-2LE", "ASCII//IGNORE", h->hint, &il, out, &ol);
+	chconv("UCS-2LE", "ASCII//IGNORE", h->hint, &il, out, &ol);
 	fprintf(fp, "Hint='%s'\n", out);
+
+	il = sizeof(h->reserved3);
+	ol = sizeof(out);
+	chconv("UCS-2LE", "ASCII//IGNORE", h->reserved3, &il, out, &ol);
+	fprintf(fp, "Reserved3='%s'\n", out);
 }
 
 
@@ -308,7 +468,7 @@ struct sHandyStoreB2 {
 	uint8_t		isValid;
 	uint8_t		Signature[4];
 	uint8_t		reserved1[4];
-	uint8_t		Label  [64];
+	char		Label  [64];
 	uint8_t		reserved[439];
 	uint8_t		checksum;
 
@@ -351,7 +511,7 @@ static void
 print_HDBlock2(FILE * fp, struct sHandyStoreB2 *h)
 {
 	char		out       [32 + 1];
-	size_t		il     , ol, cc;
+	size_t		il     , ol;
 
 	if (h->isValid == 0)
 		return;
@@ -359,7 +519,7 @@ print_HDBlock2(FILE * fp, struct sHandyStoreB2 *h)
 	il = 2 * 32;
 	ol = sizeof(out);
 	memset(out, 0, sizeof(out));
-	cc = chconv("UCS-2LE", "ASCII//IGNORE", h->Label, &il, out, &ol);
+	chconv("UCS-2LE", "ASCII//IGNORE", h->Label, &il, out, &ol);
 	fprintf(fp, "Label='%s'\n", out);
 }
 
@@ -635,7 +795,7 @@ ChangePassword(scsi_device *device, char *oldpassword, int oldpasswordlen, char 
 }
 
 static int
-SecureErase(scsi_device *device, unsigned char CipherID, off_t ksize, char *key)
+SecureErase(scsi_device *device, unsigned char CipherID, off_t ksize, unsigned char *key)
 {
 	struct sEncryptionStatus e = {.isValid = 0}, enew = {.isValid = 0};
 	struct sHandyStoreB1 h = {.isValid = 0};
@@ -912,7 +1072,7 @@ GetDeviceConfigurationPage(scsi_device *device, struct sDeviceConfigurationPage 
 {
 	unsigned char	data[127];
 	unsigned char	datalen = sizeof(data);
-	int		cc1       , cc2;
+	int		cc1;
 
 	cc1 = ModeSense(device, kMODEDEVICECONFIGURATIONPAGE, 0, kMODE_SENSE_CURRENT_VALUES, 1, data, &datalen);
 	memset(sdcp, 0, sizeof(*sdcp));
@@ -920,7 +1080,7 @@ GetDeviceConfigurationPage(scsi_device *device, struct sDeviceConfigurationPage 
 
 	if (s2 != NULL) {
 		datalen = sizeof(data);
-		cc2 = ModeSense(device, kMODEDEVICECONFIGURATIONPAGE, 0, kMODE_SENSE_CHANGEABLE_VALUES, 1, data, &datalen);
+		ModeSense(device, kMODEDEVICECONFIGURATIONPAGE, 0, kMODE_SENSE_CHANGEABLE_VALUES, 1, data, &datalen);
 		memset(s2, 0, sizeof(*s2));
 		memcpy(s2, data, min(datalen, sizeof(*s2)));
 	}
@@ -989,7 +1149,7 @@ GetOperationsPage(scsi_device *device, struct sOperationsPage *ocp, struct sOper
 {
 	unsigned char	data[127];
 	unsigned char	datalen = sizeof(data);
-	int		cc1       , cc2;
+	int		cc1;
 
 	cc1 = ModeSense(device, kMODEOPERATIONSPAGE, 0, kMODE_SENSE_CURRENT_VALUES, 1, data, &datalen);
 	memset(ocp, 0, sizeof(*ocp));
@@ -997,7 +1157,7 @@ GetOperationsPage(scsi_device *device, struct sOperationsPage *ocp, struct sOper
 
 	if (o2 != NULL) {
 		datalen = sizeof(data);
-		cc2 = ModeSense(device, kMODEOPERATIONSPAGE, 0, kMODE_SENSE_CHANGEABLE_VALUES, 1, data, &datalen);
+		ModeSense(device, kMODEOPERATIONSPAGE, 0, kMODE_SENSE_CHANGEABLE_VALUES, 1, data, &datalen);
 		memset(o2, 0, sizeof(*o2));
 		memcpy(o2, data, min(datalen, sizeof(*o2)));
 	}
@@ -1036,115 +1196,6 @@ print_OCP(FILE * fp, struct sOperationsPage *s, struct sOperationsPage *r)
 		fprintf(fp, "reserved8 = 0x%02X (&0x%02X)\n", (int)(s->reserved8), (int)(r->reserved8));
 	fprintf(fp, "\n");
 };
-
-#ifdef __FreeBSD__
-static
-int
-scsicmd(scsi_device *device, char *cdb, int cdb_len, u_int32_t flags, u_int8_t * data_ptr, ssize_t * data_bytes)
-{
-	union ccb      *ccb;
-	int		error = 0;
-	int		retval;
-	int		retry_count = 0;
-	int		timeout = 5000;
-
-	ccb = cam_getccb(device);
-
-	if (ccb == NULL) {
-		warnx("scsicmd: error allocating ccb");
-		return (1);
-	}
-	bzero(&(&ccb->ccb_h)[1],
-	      sizeof(union ccb) - sizeof(struct ccb_hdr));
-
-
-	if (retry_count > 0)
-		flags |= CAM_PASS_ERR_RECOVER;
-
-	/* Disable freezing the device queue */
-	flags |= CAM_DEV_QFRZDIS;
-
-	/*
-	 * We should probably use csio_build_visit or something like that
-	 * here, but it's easier to encode arguments as you go. The
-	 * alternative would be skipping the CDB argument and then encoding
-	 * it here, since we've got the data buffer argument by now.
-	 */
-	bcopy(cdb, &ccb->csio.cdb_io.cdb_bytes, cdb_len);
-
-	cam_fill_csio(&ccb->csio,
-		       /* retries */ retry_count,
-		       /* cbfcnp */ NULL,
-		       /* flags */ flags,
-		       /* tag_action */ MSG_SIMPLE_Q_TAG,
-		       /* data_ptr */ data_ptr,
-		       /* dxfer_len */ *data_bytes,
-		       /* sense_len */ SSD_FULL_SIZE,
-		       /* cdb_len */ cdb_len,
-		       /* timeout */ timeout ? timeout : 5000);
-
-	if (((retval = cam_send_ccb(device, ccb)) < 0)
-	    || ((ccb->ccb_h.status & CAM_STATUS_MASK) != CAM_REQ_CMP)) {
-		const char	warnstr[] = "error sending command";
-
-		if (retval < 0)
-			warn(warnstr);
-		else
-			warnx(warnstr);
-
-		cam_error_print(device, ccb, CAM_ESF_ALL,
-				CAM_EPF_ALL, stderr);
-		error = 1;
-		goto scsicmd_bailout;
-	}
-scsicmd_bailout:
-
-	cam_freeccb(ccb);
-	return (error);
-}
-#elif defined(__linux__)
-static
-int
-scsicmd(scsi_device *device, char *cdb, int cdb_len, u_int32_t flags, u_int8_t * data_ptr, ssize_t * data_bytes)
-{
-	int status, step = 0;
-	struct sg_header sg_hddata, *sg_hd;
-	char *buf;
-	int size_in, size_out;
-	size_in = sizeof(*sg_hd);
-	if (flags & SCSI_DIR_IN)
-		size_in += *data_bytes;
-	size_out = sizeof(*sg_hd) + cdb_len;
-	if (flags & SCSI_DIR_OUT)
-		size_out += *data_bytes;
-
-	buf = calloc(1, sizeof(*sg_hd) + cdb_len + *data_bytes);
-	sg_hd = (struct sg_header *)buf;
-	sg_hd->reply_len = size_in;
-	sg_hd->twelve_byte = cdb_len == 12;
-	sg_hd->result = 0;
-	memcpy(buf + sizeof(*sg_hd), cdb, cdb_len);
-	if (flags & SCSI_DIR_OUT)
-		memcpy(buf + sizeof(*sg_hd) + cdb_len, data_ptr, *data_bytes);
-
-	status = write(device->fd, buf, size_out);
-	if (status < 0 ) goto scsicmd_error;
-	step++;
-
-	status = read(device->fd, sg_hd, size_in);
-	if (status < 0 ) goto scsicmd_error;
-	step++;
-	if (data_ptr)
-		memcpy(data_ptr, ((char*)sg_hd + sizeof(*sg_hd)), size_in - sizeof(*sg_hd));
-
-	return 0;
-scsicmd_error:
-	err(1, "SCSI device error on step %d %p", step, sg_hd); 
-	return -1;
-}
-#else
-#error Function needs to be implemented
-#endif
 
 static
 void 
@@ -1188,13 +1239,9 @@ fgets_noecho(char * restrict str, int size, FILE * restrict stream) {
 int
 main(int argc, char *argv[])
 {
-	char           *device = NULL;
-	int		unit = 0;
 	scsi_device *cam_dev = NULL;
 	int		error = 0;
-
-	char		name      [30];
-	char		*key = NULL;
+	unsigned char	*key = NULL;
 
 	//printf("sizeof wchar_t = %d\n", sizeof(wchar_t));
 	//assert(sizeof(wchar_t) == 2);
@@ -1204,24 +1251,10 @@ main(int argc, char *argv[])
 		goto done;
 	};
 
-#ifdef __FreeBSD__
-	if (cam_get_device(argv[2], name, sizeof name, &unit)
-	    == -1)
-		errx(1, "%s", cam_errbuf);
-	device = strdup(name);
+	cam_dev = scsi_open(argv[2]);
+	if (!cam_dev)
+		err(errno, "open %s failed", argv[2]);
 
-
-	if ((cam_dev = cam_open_spec_device(device, unit, O_RDWR, NULL))
-	    == NULL)
-		errx(1, "%s", cam_errbuf);
-#elif defined(__linux__)
-	cam_dev = calloc(1,sizeof(*cam_dev));
-	cam_dev->fd = open(argv[2],O_RDWR);
-	if (cam_dev->fd < 0)
-		err(1, "SCSI device access error");
-#else
-#error Function needs to be implemented
-#endif
 	struct sEncryptionStatus e = {.isValid = 0};
 	error = GetEncryptionStatus(cam_dev, &e);
 
@@ -1271,7 +1304,7 @@ main(int argc, char *argv[])
 		}
 		char		pwd       [512];
 		char		opw       [512];
-		size_t		ps     , il, ol, cc;
+		size_t		ps     , il, ol;
 
 		fputs("Enter device password: ", stdout);
 		fgets_noecho(pwd, sizeof(pwd) - 1, stdin);
@@ -1286,7 +1319,7 @@ main(int argc, char *argv[])
 		il = ps;
 		ol = sizeof(opw);
 
-		cc = chconv("ASCII", "UCS-2LE", pwd, &il, opw, &ol);
+		chconv("ASCII", "UCS-2LE", pwd, &il, opw, &ol);
 		error = Unlock(cam_dev, opw, 2 * ps);
 		warnx("Device status: %02X (%s)", error, eIDtoStr((int)error));
 		e.SecurityState = error;
@@ -1309,7 +1342,8 @@ main(int argc, char *argv[])
 			return 1;
 		}
 
-		int d, len;
+		int d;
+		ssize_t len;
 		d = open(argv[3], O_RDONLY);
 		if (d < 0) {
 			warn("Can't open '%s':", argv[3]);
@@ -1318,8 +1352,9 @@ main(int argc, char *argv[])
 		}
 		len = read(d, &bin, sizeof(bin));
 		close(d);
-		if(len <= sizeof(bin.hdr)) {
-			warn("'%s' length too short:", argv[3]);
+		if(len == -1) {
+			warn("'%s' read error", argv[3]);
+			error = errno;
 			goto done;
 		}
 
@@ -1342,7 +1377,7 @@ main(int argc, char *argv[])
 		char		newpwd2   [512];
 		char		oldopw    [512];
 		char		newopw    [512];
-		size_t		oldps  , newps, il, ol, cc;
+		size_t		oldps  , newps, il, ol;
 
 		fputs("Enter old device password: ", stdout);
 		fgets_noecho(oldpwd, sizeof(oldpwd) - 1, stdin);
@@ -1365,7 +1400,7 @@ main(int argc, char *argv[])
 		il = oldps;
 		ol = sizeof(oldopw);
 
-		cc = chconv("ASCII", "UCS-2LE", oldpwd, &il, oldopw, &ol);
+		chconv("ASCII", "UCS-2LE", oldpwd, &il, oldopw, &ol);
 
 		newps = strlen(newpwd);
 		if (newps >= 2 && newpwd[newps - 2] == '\r' && newpwd[newps - 1] == '\n') {
@@ -1376,7 +1411,7 @@ main(int argc, char *argv[])
 		il = newps;
 		ol = sizeof(newopw);
 
-		cc = chconv("ASCII", "UCS-2LE", newpwd, &il, newopw, &ol);
+		chconv("ASCII", "UCS-2LE", newpwd, &il, newopw, &ol);
 
 		error = ChangePassword(cam_dev, oldopw, 2 * oldps, newopw, 2 * newps);
 		warnx("Device status: %02X (%s)", error, eIDtoStr((int)error));
@@ -1386,7 +1421,7 @@ main(int argc, char *argv[])
 		char		newpwd2   [512];
 		char		newopw    [512];
 		size_t		newps = 0;
-		size_t		il     , ol, cc;
+		size_t		il     , ol;
 		int		CipherID = -1;
 		off_t		fsize = -1;
 
@@ -1454,7 +1489,7 @@ main(int argc, char *argv[])
 			il = newps;
 			ol = sizeof(newopw);
 
-			cc = chconv("ASCII", "UCS-2LE", newpwd, &il, newopw, &ol);
+			chconv("ASCII", "UCS-2LE", newpwd, &il, newopw, &ol);
 
 			error = SecureErase(cam_dev, CipherID, fsize, key);
 			warnx("Device status: %02X (%s)", error, eIDtoStr((int)error));
@@ -1529,18 +1564,6 @@ main(int argc, char *argv[])
 
 done:
 	free(key);
-	if (cam_dev != NULL)
-#ifdef __FreeBSD__
-		cam_close_device(cam_dev)
-#elif defined(__linux__)
-	{
-		close(cam_dev->fd);
-		free(cam_dev);
-	}
-#else
-#error Function needs to be implemented
-#endif
-		;
-
+	scsi_close(cam_dev);
 	exit(error);
 }

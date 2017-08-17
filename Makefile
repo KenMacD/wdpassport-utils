@@ -1,5 +1,5 @@
 
 
 wdutils: wdutils.c
-	gcc -o $@ $< -lcrypto
+	gcc -Wall -o $@ $< -lcrypto
 
