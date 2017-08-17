@@ -488,7 +488,6 @@ ReadHandyStoreBlock2(scsi_device *device, struct sHandyStoreB2 *h)
 		warnx("Wrong HSB2 checksum");
 		return 1;
 	}
-	hexdump(sector, ssector, "HSB2 block:");
 	if (memcmp(Signature, sector, 4) != 0) {
 		warnx("Wrong HSB2 signature ");
 		return 1;
@@ -500,7 +499,7 @@ ReadHandyStoreBlock2(scsi_device *device, struct sHandyStoreB2 *h)
 		memcpy(h->reserved, sector + 72, 439);
 		h->checksum = sector[511];
 	}
-	//hexdump(sector, ssector, NULL);
+	//hexdump(sector, ssector, "HSB2");
 
 	return cc;
 }
@@ -1277,7 +1276,7 @@ main(int argc, char *argv[])
 		struct sHandyStoreB2 hb2 = {.isValid = 0};
 		error = ReadHandyStoreBlock2(cam_dev, &hb2);
 		if ( error != 0) {
-			warnx("Handy Store Block 1 is not readable (error = %d)", error);
+			warnx("Handy Store Block 2 is not readable (error = %d)", error);
 		} else
 			print_HDBlock2(stderr, &hb2);
 
