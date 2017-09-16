@@ -1,0 +1,438 @@
+#!/usr/bin/env python
+
+'''
+Copyright (c) 2017, Architector Inc., Japan
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met: 
+
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer. 
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution. 
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+'''
+
+import sys
+import glob
+import argparse
+import subprocess
+import getpass
+import hashlib
+from collections import OrderedDict
+
+
+class DataReader:
+
+    def __init__(self, string, int16 = None, int32 = None):
+        self._string = string
+        self.int16 = int16 if int16 is not None else self.int16be
+        self.int32 = int32 if int32 is not None else self.int32be
+
+    def __str__(self):
+        return self.string.encode('hex')
+
+    def _get_string(self):
+        return self._string
+
+    string = property(_get_string)
+
+    def _get_length(self):
+        return len(self._string)
+
+    length = property(_get_length)
+
+    def ascii(self, offset, length):
+        return self.string[offset:offset + length].strip()
+
+    def int8(self, offset):
+        return ord(self.string[offset])
+
+    def int16le(self, offset):
+        return self.int8(offset + 1) << 8 | self.int8(offset)
+
+    def int16be(self, offset):
+        return self.int8(offset) << 8 | self.int8(offset + 1)
+
+    def int32le(self, offset):
+        return self.int16le(offset + 2) << 16 | self.int16le(offset)
+
+    def int32be(self, offset):
+        return self.int16be(offset) << 16 | self.int16be(offset + 2)
+
+    def to_le(self):
+        return DataReader(self.string, self.int16le, self.int32le)
+
+    def to_be(self):
+        return DataReader(self.string, self.int16be, self.int32be)
+
+
+class DataWriter:
+
+    def __init__(self, string = None, int16 = None, int32 = None):
+        self._string = string if string is not None else bytearray()
+        self.int16 = int16 if int16 is not None else self.int16be
+        self.int32 = int32 if int32 is not None else self.int32be
+
+    def __str__(self):
+        return str(self.string).encode('hex')
+
+    def _get_string(self):
+        return self._string
+
+    string = property(_get_string)
+
+    def _get_length(self):
+        return len(self._string)
+
+    length = property(_get_length)
+
+    def ascii(self, value):
+        self.string.extend(value)
+        return self
+
+    def int8(self, value):
+        self.string.append(value)
+        return self
+
+    def int16le(self, value):
+        self.int8(value & 0xff)
+        self.int8(value >> 8 & 0xff)
+        return self
+
+    def int16be(self, value):
+        self.int8(value >> 8 & 0xff)
+        self.int8(value & 0xff)
+        return self
+
+    def int32le(self, value):
+        self.int16le(value & 0xffff)
+        self.int16le(value >> 16 & 0xffff)
+        return self
+
+    def int32be(self, value):
+        self.int16be(value >> 16 & 0xffff)
+        self.int16be(value & 0xffff)
+        return self
+
+    def fill_to(self, offset, value = 0x00):
+        while self.length < offset:
+            self.int8(value)
+        return self
+
+    def to_le(self):
+        return DataWriter(self.string, self.int16le, self.int32le)
+
+    def to_be(self):
+        return DataWriter(self.string, self.int16be, self.int32be)
+
+
+class Device:
+
+    STRING_KEYS = ('device', 'vendor', 'product', 'serial', 'enclosure', 'status_name', 'cipher_name')
+
+    STATUS_NAMES = {
+        0: 'not protected',
+        1: 'locked',
+        2: 'unlocked',
+        6: 'avoided',
+        7: 'unsupported',
+    }
+
+    CIPHER_NAMES = {
+        0x00: 'none',
+        0x10: 'AES-128-ECB',
+        0x12: 'AES-128-CBC',
+        0x18: 'AES-128-XTS',
+        0x20: 'AES-256-ECB',
+        0x22: 'AES-256-CCB',
+        0x28: 'AES-256-XTS',
+        0x30: 'FDE',
+    }
+
+    HASH_ALGORITHMS = {
+        0x20: hashlib.sha256,
+        0x22: hashlib.sha256,
+        0x28: hashlib.sha256,
+        0x30: hashlib.sha256,
+    }
+
+    def __init__(self, device, vendor, product, serial, enclosure, status, cipher):
+        self.device = device
+        self.vendor = vendor
+        self.product = product
+        self.serial = serial
+        self.enclosure = enclosure
+        self.status = status
+        self.cipher = cipher
+
+    def __str__(self):
+        values = []
+        for key in Device.STRING_KEYS:
+            values.append(str(getattr(self, key)))
+        return ','.join(values)
+
+    def _get_status_name(self):
+        if self.status in Device.STATUS_NAMES:
+            return Device.STATUS_NAMES[self.status]
+        else:
+            return 'unknown({})'.format(self.status)
+
+    status_name = property(_get_status_name)
+
+    def _get_cipher_name(self):
+        if self.cipher in Device.CIPHER_NAMES:
+            return Device.CIPHER_NAMES[self.cipher]
+        else:
+            return 'unknown({})'.format(self.cipher)
+
+    cipher_name = property(_get_cipher_name)
+
+    def _get_hash_algorithm(self):
+        if self.cipher in Device.HASH_ALGORITHMS:
+            return Device.HASH_ALGORITHMS[self.cipher]
+        else:
+            return None
+
+    hash_algorithm = property(_get_hash_algorithm)
+
+
+class KeyParameter:
+
+    STRING_KEYS = ('iteration', 'salt', 'endian')
+
+    BIG_ENDIAN = 'be'
+
+    LITTLE_ENDIAN = 'le'
+
+    def __init__(self, iteration, salt, endian):
+        self._iteration = iteration
+        self._salt = tuple(salt)
+        self._endian = endian
+
+    def __str__(self):
+        values = []
+        for key in KeyParameter.STRING_KEYS:
+            values.append(str(getattr(self, key)))
+        return ','.join(values)
+
+    def _get_iteration(self):
+        return self._iteration
+
+    iteration = property(_get_iteration)
+
+    def _get_salt(self):
+        return self._salt
+
+    salt = property(_get_salt)
+
+    def _get_endian(self):
+        return self._endian
+
+    endian = property(_get_endian)
+
+    def apply(self, password, algorithm):
+        data = getattr(DataWriter(), 'to_' + self.endian)()
+        for value in self.salt:
+            data.int16(value)
+        data.ascii(password.decode('utf-8').encode('utf-16-' + self.endian))
+        key = str(data.string)
+        for _ in range(self.iteration):
+            key = algorithm(key).digest()
+        return key
+
+KeyParameter.DEFAULT = KeyParameter(1000, map(ord, 'WDC.'), KeyParameter.LITTLE_ENDIAN)
+
+
+class CommandError(Exception):
+
+    def __init__(self, command, returncode, stderr):
+        self.command = command
+        self.returncode = returncode
+        self.stderr = stderr
+
+    def __str__(self):
+        return 'command \'{}\' exit with {}\n{}'.format(' '.join(self.command), self.returncode, self.stderr)
+
+
+def sg_request(device, size, command, input = None):
+    if isinstance(command, basestring):
+        command = map(lambda s: int(s, 16), command.split())
+    if isinstance(command, DataWriter):
+        command = command.string
+    if isinstance(input, DataWriter):
+        input = str(input.string)
+    tokens = ['/usr/bin/sg_raw', '-o', '-']
+    if size > 0:
+        tokens.extend(['-r', str(size)])
+    if input is not None:
+        tokens.extend(['-s', str(len(input))])
+    tokens.append(device)
+    tokens.extend(map(lambda i: '%02x' % i, command))
+    process = subprocess.Popen(tokens, stdin = subprocess.PIPE, stdout = subprocess.PIPE, stderr = subprocess.PIPE)
+    output, error = process.communicate(input)
+    if process.returncode != 0:
+        raise CommandError(tokens, process.returncode, error)
+    return DataReader(output)
+
+
+def read_devices():
+    storages = OrderedDict()
+    enclosures = {}
+    for device in sorted(glob.glob('/dev/sg*')):
+        try:
+            data = sg_request(device, 32, '12 00 00 00 20 00')
+        except CommandError as error:
+            print device, 'failed on standard inquiry', error
+            continue
+        type = data.int8(0) & 0x1f
+        vendor = data.ascii(8, 8)
+        product = data.ascii(16, 16)
+        if vendor != 'WD' or type not in [0, 13]:
+            continue
+        try:
+            data = sg_request(device, 32, '12 01 80 00 20 00')
+        except CommandError as error:
+            print device, 'failed on inquiry vpd:0x80', error
+            continue
+        serial = data.ascii(4, min(data.int8(3), data.length - 4))
+        if type == 0:
+            storages[serial] = Device(device, vendor, product, serial, None, -1, -1)
+        elif type == 13:
+            enclosures[serial] = device
+    devices = OrderedDict()
+    for serial, storage in storages.items():
+        if serial not in enclosures:
+            continue
+        storage.enclosure = enclosures[serial]
+        try:
+            data = sg_request(storage.enclosure, 16, 'c0 45 00 00 00 00 00 00 10 00')
+        except CommandError as error:
+            print storage.enclosure, 'failed on read encryption status', error
+            continue
+        storage.status = data.int8(3)
+        storage.cipher = data.int8(4)
+        devices[storage.device] = storage
+    return devices
+
+
+def read_key_parameter(device):
+    try:
+        data = sg_request(device, 512, 'd8 00 00 00 00 01 00 00 01 00')
+    except CommandError as error:
+        print device, 'apply default key parameter: failed on read handy store block:1', error
+        return KeyParameter.DEFAULT
+    if data.length != 512:
+        print device, 'apply default key parameter: handy store block:1 invalid size({})'.format(data.length)
+        return KeyParameter.DEFAULT
+    if data.int16(0) != 0x01:
+        print device, 'apply default key parameter: handy store block:1 invalid signature(block number)'
+        return KeyParameter.DEFAULT
+    marker = data.ascii(2, 2)
+    if marker == 'WD':
+        endian = KeyParameter.BIG_ENDIAN
+    elif marker == 'DW':
+        endian = KeyParameter.LITTLE_ENDIAN
+    else:
+        print device, 'apply default key parameter: handy store block:1 invalid signature(\'WD\')'
+        return KeyParameter.DEFAULT
+    checksum = 0
+    for index in range(data.length):
+        checksum += data.int8(index)
+    if checksum & 0xFF != 0:
+        print device, 'apply default key parameter: handy store block:1 invalid checksum'
+        return KeyParameter.DEFAULT
+    data = getattr(data, 'to_' + endian)()
+    return KeyParameter(data.int32(8), (data.int16(12), data.int16(14), data.int16(16), data.int16(18)), endian)
+
+
+class Program:
+
+    def __init__(self):
+        self._devices = None
+        self._password = None
+        self.parser = argparse.ArgumentParser(description = 'WD My Passport series utility for Linux')
+        self.parser.add_argument('--list', action = 'store_true',
+                                 help = 'list WD My Passport devices')
+        self.parser.add_argument('--unlock', nargs = '+', metavar = '/dev/sgN',
+                                 help = 'unlock specified device')
+        self.parser.add_argument('--unlock-all', action = 'store_true',
+                                 help = 'unlock all of locked devices')
+        self.parser.add_argument('--passwd', metavar = '********',
+                                 help = 'specify password')
+
+    def _get_devices(self):
+        if self._devices is None:
+            self._devices = read_devices()
+        return self._devices
+
+    devices = property(_get_devices)
+
+    def _get_password(self):
+        if self._password is None and self.args.passwd is not None:
+            self._password = self.args.passwd
+        while self._password is None:
+            passwd = getpass.getpass(prompt = 'password: ')
+            retype = getpass.getpass(prompt = 'retype: ')
+            if passwd == retype:
+                self._password = passwd
+            else:
+                print 'password does not match...'
+        return self._password
+
+    password = property(_get_password)
+
+    def unlock(self, device):
+        if device not in self.devices:
+            print device.device, 'skipped: not found'
+            return
+        device = self.devices[device]
+        if device.status != 1:
+            print device.device, 'skipped: status', device.status_name
+            return
+        if device.hash_algorithm is None:
+            print device.device, 'skipped: unsupported cipher', device.cipher_name
+            return
+        key = read_key_parameter(device.device).apply(self.password, device.hash_algorithm)
+        data = DataWriter().int8(0x45).fill_to(6).int16(len(key)).ascii(key)
+        command = DataWriter().int8(0xc1).int8(0xe1).fill_to(7).int16(data.length).int8(0x00)
+        try:
+            sg_request(device.device, 0, command, data)
+        except CommandError as error:
+            print device.device, 'failed on unlock encryption', error
+            return
+        print device.device, 'unlocked successfully'
+
+    def main(self):
+        self.args = self.parser.parse_args()
+        if not self.args.list and self.args.unlock is None and not self.args.unlock_all:
+            self.parser.print_help()
+            sys.exit(1)
+        if self.args.list:
+            print '#', ','.join(Device.STRING_KEYS)
+            for device in self.devices.values():
+                print device
+        if self.args.unlock is not None:
+            for device in self.args.unlock:
+                self.unlock(device)
+        if self.args.unlock_all:
+            for device in self.devices.keys():
+                self.unlock(device)
+        sys.exit(0)
+
+
+if __name__ == '__main__':
+    Program().main()
+
