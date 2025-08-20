@@ -505,8 +505,8 @@ The KEY LENGTH field contain the length of KEY blob. The size is expressed in
 bits (not bytes as in password length used in other commands).
 
 On some drives the KEY supplied become new DEK (but remember COMBINE bit
-effect). On some drives (FDE?) use no KEY supplied, drive will generate new
-DEK by self.
+effect). On some drives (FDE?) use no KEY supplied, KEY LENGTH must be set to
+zero and drive will generate new DEK by itself.
 
 The size of data is not user selectable it must be same as the password length
 of password of selected CIPHER ID. Otherwise command will be terminated with 
