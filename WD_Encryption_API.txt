@@ -4,7 +4,7 @@
                                 of 
                          WD My Passport drive
 
-			Rev. D, 06.07.2016
+			Rev. E, 19.08.2025
 
  -------------------------------------------------------------------------
  * INFORMATIONS ARE PROVIDED ``AS IS'' AND ANY EXPRESS OR IMPLIED 
