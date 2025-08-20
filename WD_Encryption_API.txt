@@ -795,7 +795,7 @@ compute password blob from user input for AES 256 and FDE. AES 128 drives
 are unsupported by current version of WD Utilities, so WD standard algorithm
 is not known for AES 128 suite.
 
-All string operations (e.g. user input and hash) are done in UCS-2
+All string operations (e.g. user input and hash) are done in UTF-16
 (little-endian) encoding.
 
 The pseudo code of algorithm used in WD Utilities:
@@ -869,7 +869,7 @@ salted user password string.
 
 SALT and HINTS fields
 
-The SALT and HINTS fields are UCS-2 little endian encoded strings. The first
+The SALT and HINTS fields are UTF-16 little endian encoded strings. The first
 one is used as salt in process of password blob calculation. The second one
 is just hint for the user to help him to enter password. Such arbitrary string has
 no meaning for drive nor WD utilities beyond it can be displayed to user.
@@ -924,7 +924,7 @@ Table 18 - User Block (Handy Store block 2)
 
 LABEL field
 
-The LABEL field is UCS-2 little endian encoded strings. It is used as device label.
+The LABEL field is UTF-16 little endian encoded strings. It is used as device label.
 
 CHECKSUM field
 
